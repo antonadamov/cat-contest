@@ -3,8 +3,9 @@ import argparse
 import os
 import random
 import json
+import re
 from telegram import InlineKeyboardButton, InputMediaPhoto, Update, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from PIL import Image
 
 # Set up argument parser
@@ -60,7 +61,9 @@ def get_text(lang_code, key, **kwargs):
             "continue_voting": "Continue voting",
             "vote_prompt": "Choose the cat you like the most:",
             "next_action_prompt": "What would you like to do next?",
-            "thanks_voting": "Thanks for voting! You voted for {winner}."
+            "thanks_voting": "Thanks for voting! You voted for {winner}.",
+            "add_photo": "Add my cat photo",
+            "send_photo_prompt": "Please send me the photo of your cat."
         },
         "ru": {
             "vote_cat_1": "Кот слева",
@@ -69,11 +72,27 @@ def get_text(lang_code, key, **kwargs):
             "continue_voting": "Продолжить голосование",
             "vote_prompt": "Выбирете кота который вам больше нравится:",
             "next_action_prompt": "Что бы вы хотели сделать дальше?",
-            "thanks_voting": "Спасибо за голосование! Вы проголосовали за {winner}."
+            "thanks_voting": "Спасибо за голосование! Вы проголосовали за {winner}.",
+            "add_photo": "Добавить фото моего кота",
+            "send_photo_prompt": "Пожалуйста, пришлите мне фото вашего кота."
         }
     }
     text = texts.get(lang_code, texts["en"]).get(key, key)
     return text.format(**kwargs)
+
+def preprocess_image(image_path, output_size=(800, 600)):
+    with Image.open(image_path) as img:
+        # Resize the image to the desired size, maintaining aspect ratio
+        img.thumbnail(output_size, Image.Resampling.LANCZOS)  # Updated to use Image.Resampling.LANCZOS
+        
+        # Save the processed image to a temporary path or in-memory bytes object
+        temp_path = image_path.replace(".jpg", "") + "-resized.jpg"
+        img.save(temp_path)
+        
+        return temp_path
+
+def sanitize_filename(filename):
+    return re.sub(r'[^a-zA-Z0-9]', '', filename)
 
 # Define a function to handle the /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,6 +106,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_info += f"Language Code: {user.language_code}\n"
 
     logging.info(user_info)
+
     await update.message.reply_text('Hello! I am your bot.')
     await vote(update, context, user.language_code)
 
@@ -118,7 +138,8 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: st
     keyboard = [
         [InlineKeyboardButton(get_text(lang_code, "vote_cat_1"), callback_data=f'vote_{cat_image_1_short}_{cat_image_2_short}_1'),
          InlineKeyboardButton(get_text(lang_code, "vote_cat_2"), callback_data=f'vote_{cat_image_1_short}_{cat_image_2_short}_2')],
-        [InlineKeyboardButton(get_text(lang_code, "show_results"), callback_data='show_results')]
+        [InlineKeyboardButton(get_text(lang_code, "show_results"), callback_data='show_results')],
+        [InlineKeyboardButton(get_text(lang_code, "add_photo"), callback_data='add_photo')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -139,16 +160,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data == 'continue_voting':
         await vote(update, context, user_lang)
         return
+    elif data == 'add_photo':
+        await query.message.reply_text(get_text(user_lang, "send_photo_prompt"))
+        context.user_data["awaiting_photo"] = True
+        return
 
     _, cat1, cat2, winner_index = data.split('_')
     cat1 += ".jpg"
     cat2 += ".jpg"
     if winner_index == '1':
         update_ratings(cat1, cat2)
-        winner = "Cat 1"
+        winner = get_text(user_lang, "vote_cat_1")
     else:
         update_ratings(cat2, cat1)
-        winner = "Cat 2"
+        winner = get_text(user_lang, "vote_cat_2")
 
     await query.edit_message_text(text=get_text(user_lang, "thanks_voting", winner=winner))
     
@@ -179,12 +204,34 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=update.effective_chat.id, text=get_text(user_lang, "next_action_prompt"), reply_markup=reply_markup)
 
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("awaiting_photo"):
+        photo_file = await update.message.photo[-1].get_file()
+        sanitized_filename = sanitize_filename(f"{update.message.from_user.id}{photo_file.file_id}.jpg")
+        await photo_file.download_to_drive(sanitized_filename)
+
+        # Preprocess the image
+        processed_image_path = preprocess_image(sanitized_filename)
+        
+        # Move the processed image to the cat-pictures folder
+        new_filename = os.path.join("cat-pictures", os.path.basename(processed_image_path))
+        os.rename(processed_image_path, new_filename)
+        
+        # Remove the original downloaded image
+        os.remove(sanitized_filename)
+
+        context.user_data["awaiting_photo"] = False
+        await update.message.reply_text("Your photo has been added to the contest!")
+        # Suggest the next pair of photos for voting
+        await vote(update, context, update.message.from_user.language_code)
+
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("vote", vote))
     application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
     # Start the bot
     application.run_polling()
