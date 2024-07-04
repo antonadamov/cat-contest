@@ -60,12 +60,12 @@ def update_ratings(winner_id, loser_id):
 
     cat_collection.update_one(
         {"_id": ObjectId(winner_id)},
-        {"$set": {"rating": new_winner_rating}, "$inc": {"wins": 1}}
+        {"$set": {"rating": new_winner_rating}, "$inc": {"wins": 1, "total_votes": 1}}
     )
 
     cat_collection.update_one(
         {"_id": ObjectId(loser_id)},
-        {"$set": {"rating": new_loser_rating}, "$inc": {"losses": 1}}
+        {"$set": {"rating": new_loser_rating}, "$inc": {"losses": 1, "total_votes": 1}}
     )
     
 def get_text(lang_code, key, **kwargs):
@@ -127,7 +127,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await vote(update, context, user.language_code)
 
 async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: str = "en") -> None:
-    cat_pictures = list(cat_collection.find())
+    # Get images with the least number of votes (wins + losses)
+    cat_pictures = list(cat_collection.find().sort("total_votes", 1).limit(2))
 
     if len(cat_pictures) < 2:
         keyboard = [[InlineKeyboardButton(get_text(lang_code, "add_photo"), callback_data='add_photo')]]
@@ -135,8 +136,11 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: st
         await update.message.reply_text("Not enough cat pictures to vote on.", reply_markup=reply_markup)
         return
 
-    # Select two random cat images
-    cat1, cat2 = random.sample(cat_pictures, 2)
+    # If there are more than two pictures with the minimum number of votes, randomly select two from them
+    if len(cat_pictures) > 2:
+        cat_pictures = random.sample(cat_pictures, 2)
+
+    cat1, cat2 = cat_pictures
 
     cat_image_1_path = fs.get(cat1["_id"]).read()
     cat_image_2_path = fs.get(cat2["_id"]).read()
@@ -198,10 +202,12 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     places = ["1st Place", "2nd Place", "3rd Place"]
     for idx, cat in enumerate(top_cats):
         cat_image_path = fs.get(cat["_id"]).read()
+        wins = cat.get("wins", 0)
+        losses = cat.get("losses", 0)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=cat_image_path,
-            caption=f"{places[idx]}"
+            caption=f"{places[idx]} - Wins: {wins}, Losses: {losses}"
         )
 
     user_lang = update.callback_query.from_user.language_code
