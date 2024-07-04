@@ -9,19 +9,31 @@ from telegram.ext import CallbackQueryHandler, ApplicationBuilder, CommandHandle
 from pymongo import MongoClient
 import gridfs
 from PIL import Image
+from moderation.amazon_moderation import AmazonRekognitionModerationService
 
 # Set up argument parser
-parser = argparse.ArgumentParser(description='Start the bot with a token.')
+parser = argparse.ArgumentParser(description='Start the bot with a token and AWS parameters.')
 parser.add_argument('--token', type=str, required=True, help='Bot API token')
+parser.add_argument('--aws_access_key', type=str, required=True, help='AWS Access Key')
+parser.add_argument('--aws_secret_key', type=str, required=True, help='AWS Secret Key')
+parser.add_argument('--aws_region', type=str, required=True, help='AWS Region Name')
 args = parser.parse_args()
 
+# Extract values from arguments
 TOKEN = args.token
+AWS_ACCESS_KEY = args.aws_access_key
+AWS_SECRET_KEY = args.aws_secret_key
+AWS_REGION_NAME = args.aws_region
 
 # Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# Initialize the moderation service
+moderation_service = AmazonRekognitionModerationService(AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_REGION_NAME)
+
 
 # Connect to MongoDB
 client = MongoClient('mongodb://localhost:27017/')
@@ -128,7 +140,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: str = "en") -> None:
     # Get images with the least number of votes (wins + losses)
-    cat_pictures = list(cat_collection.find().sort("total_votes", 1).limit(2))
+    cat_pictures = list(cat_collection.find().sort("total_votes", 1).limit(10))
 
     if len(cat_pictures) < 2:
         keyboard = [[InlineKeyboardButton(get_text(lang_code, "add_photo"), callback_data='add_photo')]]
@@ -137,8 +149,7 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: st
         return
 
     # If there are more than two pictures with the minimum number of votes, randomly select two from them
-    if len(cat_pictures) > 2:
-        cat_pictures = random.sample(cat_pictures, 2)
+    cat_pictures = random.sample(cat_pictures, 2)
 
     cat1, cat2 = cat_pictures
 
@@ -228,6 +239,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # Preprocess the image
         processed_image_path = preprocess_image(sanitized_filename)
+
+        # Moderate the image
+        is_appropriate = moderation_service.moderate_image(processed_image_path)
+        if not is_appropriate:
+            await update.message.reply_text("Your photo was found to be inappropriate or does not contain a cat and cannot be added.")
+            os.remove(sanitized_filename)
+            os.remove(processed_image_path)
+            return
         
         with open(processed_image_path, 'rb') as f:
             image_id = fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
@@ -239,7 +258,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "user_id": update.message.from_user.id,
             "rating": DEFAULT_RATING,
             "wins": 0,
-            "losses": 0
+            "losses": 0,
+            "total_votes": 0
         })
 
         # Remove the original downloaded image
