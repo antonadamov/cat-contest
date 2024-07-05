@@ -11,6 +11,7 @@ import gridfs
 from PIL import Image
 from typing import List
 from moderation.amazon_moderation import AmazonRekognitionModerationService
+from db.mongo_database import MongoCatVotingDatabase
 
 # Set up argument parser
 parser = argparse.ArgumentParser(description='Start the bot with a token and AWS parameters.')
@@ -18,6 +19,9 @@ parser.add_argument('--token', type=str, required=True, help='Bot API token')
 parser.add_argument('--aws_access_key', type=str, required=True, help='AWS Access Key')
 parser.add_argument('--aws_secret_key', type=str, required=True, help='AWS Secret Key')
 parser.add_argument('--aws_region', type=str, required=True, help='AWS Region Name')
+parser.add_argument('--db_host', type=str, required=True, help='MongoDB host')
+parser.add_argument('--db_port', type=int, required=True, help='MongoDB port')
+parser.add_argument('--db_name', type=str, required=True, help='MongoDB database name')
 args = parser.parse_args()
 
 # Extract values from arguments
@@ -25,6 +29,9 @@ TOKEN = args.token
 AWS_ACCESS_KEY = args.aws_access_key
 AWS_SECRET_KEY = args.aws_secret_key
 AWS_REGION_NAME = args.aws_region
+DB_HOST = args.db_host
+DB_PORT = args.db_port
+DB_NAME = args.db_name
 
 # Set up logging
 logging.basicConfig(
@@ -34,27 +41,14 @@ logging.basicConfig(
 
 # Initialize the moderation service
 moderation_service = AmazonRekognitionModerationService(AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_REGION_NAME)
+db = MongoCatVotingDatabase(DB_HOST, DB_PORT, DB_NAME)
 
-
-# Connect to MongoDB
-client = MongoClient('mongodb://localhost:27017/')
-db = client['cat_voting']
-cat_collection = db['cat_pictures']
-declined_collection = db['declined_pictures']
-user_collection = db['user_info']
-fs = gridfs.GridFS(db)
 
 # Elo rating constants
 K = 32
 DEFAULT_RATING = 1400
 
-def get_rating(cat_id):
-    cat = cat_collection.find_one({"_id": ObjectId(cat_id)})
-    if cat:
-        return cat.get("rating", DEFAULT_RATING)
-    else:
-        logging.warning(f"Rating not found for cat ID: {cat_id}, returning default rating.")
-        return DEFAULT_RATING
+
 
 def calculate_new_ratings(winner_rating, loser_rating):
     expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
@@ -63,21 +57,11 @@ def calculate_new_ratings(winner_rating, loser_rating):
     new_loser_rating = loser_rating + K * (0 - expected_loser)
     return new_winner_rating, new_loser_rating
 
-def update_winner_in_db(winner_id, new_winner_rating):
-    cat_collection.update_one(
-        {"_id": ObjectId(winner_id)},
-        {"$set": {"rating": new_winner_rating}, "$inc": {"wins": 1, "total_votes": 1}}
-    )
 
-def update_loser_in_db(loser_id, new_loser_rating):
-    cat_collection.update_one(
-        {"_id": ObjectId(loser_id)},
-        {"$set": {"rating": new_loser_rating}, "$inc": {"losses": 1, "total_votes": 1}}
-    )
 
 def update_ratings(winner_id, loser_id):
-    winner = cat_collection.find_one({"_id": ObjectId(winner_id)})
-    loser = cat_collection.find_one({"_id": ObjectId(loser_id)})
+    winner = db.cat_collection.find_one({"_id": ObjectId(winner_id)})
+    loser = db.cat_collection.find_one({"_id": ObjectId(loser_id)})
 
     if not winner or not loser:
         logging.error(f"Cannot find cat entries for winner_id: {winner_id} or loser_id: {loser_id}")
@@ -88,8 +72,8 @@ def update_ratings(winner_id, loser_id):
 
     new_winner_rating, new_loser_rating = calculate_new_ratings(winner_rating, loser_rating)
 
-    update_winner_in_db(winner_id, new_winner_rating)
-    update_loser_in_db(loser_id, new_loser_rating)
+    db.update_winner(winner_id, new_winner_rating)
+    db.update_loser(loser_id, new_loser_rating)
     
 def get_text(lang_code, key, **kwargs):
     texts = {
@@ -150,7 +134,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     }
 
     logging.info(f"New user logged in {user_info}")
-    user_collection.update_one({"_id": user.id}, {"$set": user_info}, upsert=True)
+    db.user_collection.update_one({"_id": user.id}, {"$set": user_info}, upsert=True)
 
     await update.message.reply_text('Hello! I am your bot.')
     await vote(update, context, user.language_code)
@@ -169,7 +153,7 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: st
     await send_media_and_message(context, update.effective_chat.id, media_group, lang_code, reply_markup)
 
 def fetch_cat_pictures(limit: int) -> List[dict]:
-    return list(cat_collection.find().sort("total_votes", 1).limit(limit))
+    return list(db.cat_collection.find().sort("total_votes", 1).limit(limit))
 
 async def send_not_enough_pictures_message(update: Update, lang_code: str) -> None:
     keyboard = [[InlineKeyboardButton(get_text(lang_code, "add_photo"), callback_data='add_photo')]]
@@ -180,7 +164,7 @@ def select_random_cats(cat_pictures: List[dict], count: int) -> List[dict]:
     return random.sample(cat_pictures, count)
 
 def prepare_media_group(cats: List[dict]) -> List[InputMediaPhoto]:
-    return [InputMediaPhoto(fs.get(cat["_id"]).read(), caption=f"Cat {i+1}") for i, cat in enumerate(cats)]
+    return [InputMediaPhoto(db.fs.get(cat["_id"]).read(), caption=f"Cat {i+1}") for i, cat in enumerate(cats)]
 
 def create_keyboard(cats: List[dict], lang_code: str) -> InlineKeyboardMarkup:
     cat1, cat2 = cats
@@ -234,7 +218,7 @@ async def process_vote(query, data, user_lang, update, context) -> None:
     await vote(update, context, user_lang)
 
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    top_cats = list(cat_collection.find().sort("rating", -1).limit(3))
+    top_cats = list(db.cat_collection.find().sort("rating", -1).limit(3))
 
     if not top_cats:
         await update.callback_query.message.reply_text("No votes yet.")
@@ -242,7 +226,7 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     places = ["1st Place", "2nd Place", "3rd Place"]
     for idx, cat in enumerate(top_cats):
-        cat_image_path = fs.get(cat["_id"]).read()
+        cat_image_path = db.fs.get(cat["_id"]).read()
         wins = cat.get("wins", 0)
         losses = cat.get("losses", 0)
         await context.bot.send_photo(
@@ -291,31 +275,13 @@ async def cleanup_files(*files):
 
 async def insert_declined_photo_db(update, sanitized_filename, processed_image_path, message):
     with open(processed_image_path, 'rb') as f:
-        image_id = fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
-    declined_collection.insert_one({
-        "_id": image_id,
-        "filename": sanitized_filename,
-        "user_id": update.message.from_user.id,
-        "reason": message
-    })
+        image_id = db.fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
+    db.insert_declined_photo(image_id, sanitized_filename, update.message.from_user.id, message)
 
 async def insert_accepted_photo_db(update, sanitized_filename, processed_image_path):
     with open(processed_image_path, 'rb') as f:
-        image_id = fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
-    cat_collection.insert_one({
-        "_id": image_id,
-        "filename": sanitized_filename,
-        "user_id": update.message.from_user.id,
-        "rating": DEFAULT_RATING,
-        "wins": 0,
-        "losses": 0,
-        "total_votes": 0
-    })
-    user_collection.update_one(
-        {"_id": update.message.from_user.id},
-        {"$push": {"photos": image_id}}
-    )
-
+        image_id = db.fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
+    db.insert_accepted_photo(image_id, sanitized_filename, update.message.from_user.id, DEFAULT_RATING)
 
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
