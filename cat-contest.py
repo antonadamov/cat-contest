@@ -39,6 +39,8 @@ moderation_service = AmazonRekognitionModerationService(AWS_ACCESS_KEY, AWS_SECR
 client = MongoClient('mongodb://localhost:27017/')
 db = client['cat_voting']
 cat_collection = db['cat_pictures']
+declined_collection = db['declined_pictures']
+user_collection = db['user_info']
 fs = gridfs.GridFS(db)
 
 # Elo rating constants
@@ -125,15 +127,17 @@ def sanitize_filename(filename):
 # Define a function to handle the /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.message.from_user
-    user_info = f"User ID: {user.id}\nFirst Name: {user.first_name}\n"
-    if user.last_name:
-        user_info += f"Last Name: {user.last_name}\n"
-    if user.username:
-        user_info += f"Username: @{user.username}\n"
-    if user.language_code:
-        user_info += f"Language Code: {user.language_code}\n"
+    user_info = {
+        "_id": user.id,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "username": user.username,
+        "language_code": user.language_code,
+        "photos": []
+    }
 
     logging.info(user_info)
+    user_collection.update_one({"_id": user.id}, {"$set": user_info}, upsert=True)
 
     await update.message.reply_text('Hello! I am your bot.')
     await vote(update, context, user.language_code)
@@ -243,6 +247,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Moderate the image
         is_appropriate = moderation_service.moderate_image(processed_image_path)
         if not is_appropriate:
+            with open(processed_image_path, 'rb') as f:
+                image_id = fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
+            declined_collection.insert_one({
+                "_id": image_id,
+                "filename": sanitized_filename,
+                "user_id": update.message.from_user.id,
+                "reason": "Inappropriate content or does not contain a cat"
+            })
             await update.message.reply_text("Your photo was found to be inappropriate or does not contain a cat and cannot be added.")
             os.remove(sanitized_filename)
             os.remove(processed_image_path)
@@ -261,6 +273,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "losses": 0,
             "total_votes": 0
         })
+
+        user_collection.update_one(
+            {"_id": update.message.from_user.id},
+            {"$push": {"photos": image_id}}
+        )
 
         # Remove the original downloaded image
         os.remove(sanitized_filename)
