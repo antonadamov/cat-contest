@@ -22,7 +22,7 @@ class AmazonRekognitionModerationService(ImageModerationService):
         
         for label in response['ModerationLabels']:
             if label['Confidence'] > 90:  # Confidence threshold
-                return False  # Image is inappropriate
+                return False,  "Image is inappropriate"
 
         # Check for presence of a cat
         response = self.client.detect_labels(
@@ -33,6 +33,6 @@ class AmazonRekognitionModerationService(ImageModerationService):
         
         for label in response['Labels']:
             if label['Name'].lower() == 'cat' and label['Confidence'] > 75:
-                return True  # Cat found, image is appropriate
+                return True, "Cat found, image is appropriate"
 
-        return False  # No cat found, image is inappropriate
+        return False, "No cat found"
