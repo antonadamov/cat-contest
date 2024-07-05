@@ -136,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "photos": []
     }
 
-    logging.info(user_info)
+    logging.info(f"New user logged in {user_info}")
     user_collection.update_one({"_id": user.id}, {"$set": user_info}, upsert=True)
 
     await update.message.reply_text('Hello! I am your bot.')
@@ -198,9 +198,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if winner_index == '1':
         update_ratings(cat1, cat2)
         winner = get_text(user_lang, "vote_cat_1")
+        logging.info(f"User {query.from_user.id} voted for cat {cat1}")
     else:
         update_ratings(cat2, cat1)
         winner = get_text(user_lang, "vote_cat_2")
+        logging.info(f"User {query.from_user.id} voted for cat {cat2}")
 
     await query.edit_message_text(text=get_text(user_lang, "thanks_voting", winner=winner))
     
@@ -224,7 +226,7 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             photo=cat_image_path,
             caption=f"{places[idx]} - Wins: {wins}, Losses: {losses}"
         )
-
+    logging.info(f"Top cats sent to the user {update.callback_query.from_user.id}")
     user_lang = update.callback_query.from_user.language_code
     keyboard =  [
         [InlineKeyboardButton(get_text(user_lang, "continue_voting"), callback_data='continue_voting')],
@@ -240,13 +242,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         photo_file = await update.message.photo[-1].get_file()
         sanitized_filename = sanitize_filename(f"{update.message.from_user.id}{photo_file.file_id}.jpg")
         await photo_file.download_to_drive(sanitized_filename)
-
+        logging.info(f"Photo downloaded for user {update.message.from_user.id}")
         # Preprocess the image
         processed_image_path = preprocess_image(sanitized_filename)
 
         # Moderate the image
         is_appropriate = moderation_service.moderate_image(processed_image_path)
         if not is_appropriate:
+            logging.info(f"Photo declined for user {update.message.from_user.id}")
             with open(processed_image_path, 'rb') as f:
                 image_id = fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
             declined_collection.insert_one({
@@ -273,6 +276,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "losses": 0,
             "total_votes": 0
         })
+        logging.info(f"Photo added for user {update.message.from_user.id}")
 
         user_collection.update_one(
             {"_id": update.message.from_user.id},
