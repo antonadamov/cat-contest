@@ -1,4 +1,5 @@
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from moderation.moderation_interface import ImageModerationService
 
 class AmazonRekognitionModerationService(ImageModerationService):
@@ -11,28 +12,36 @@ class AmazonRekognitionModerationService(ImageModerationService):
         )
 
     def moderate_image(self, image_path):
-        # Open the image file
-        with open(image_path, 'rb') as image_file:
-            image_bytes = image_file.read()
+        try:
+            with open(image_path, 'rb') as image_file:
+                image_bytes = image_file.read()
 
-        # Check for inappropriate content
+            if self._contains_inappropriate_content(image_bytes):
+                return False, "Image is inappropriate"
+            if self._contains_cat(image_bytes):
+                return True, "Cat found, image is appropriate"
+            return False, "No cat found"
+        except IOError as e:
+            return False, f"Failed to read image: {e}"
+        except (BotoCoreError, ClientError) as e:
+            return False, f"Failed to moderate image: {e}"
+    
+    def _contains_inappropriate_content(self, image_bytes):
         response = self.client.detect_moderation_labels(
             Image={'Bytes': image_bytes}
         )
-        
         for label in response['ModerationLabels']:
-            if label['Confidence'] > 90:  # Confidence threshold
-                return False,  "Image is inappropriate"
+            if label['Confidence'] > 90: 
+                return True
+        return False
 
-        # Check for presence of a cat
+    def _contains_cat(self, image_bytes):
         response = self.client.detect_labels(
             Image={'Bytes': image_bytes},
             MaxLabels=10,
             MinConfidence=75
         )
-        
         for label in response['Labels']:
             if label['Name'].lower() == 'cat' and label['Confidence'] > 75:
-                return True, "Cat found, image is appropriate"
-
-        return False, "No cat found"
+                return True
+        return False
