@@ -7,6 +7,10 @@ class CatVotingDatabaseInterface(ABC):
         pass
 
     @abstractmethod
+    def add_user(self, user):
+        pass
+
+    @abstractmethod
     def update_winner(self, winner_id, new_winner_rating):
         pass
 

@@ -17,6 +17,29 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
             logging.error(f"MongoDB connection error: {e}")
             raise
 
+    def add_user(self, user):
+        try:
+            user_info = {
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "username": user.username,
+                "language_code": user.language_code
+            }
+
+            self.user_collection.update_one(
+                {"_id": user.id},
+                {
+                    "$set": user_info,
+                    "$setOnInsert": {"accepted_photos": [],
+                                     "declined_photos": []}
+                },
+                upsert=True
+            )
+            logging.info(f"User {user_info} added to database.")
+        except errors.PyMongoError as e:
+            logging.error(f"Error adding user {user.id}: {e}")
+
+
     def get_rating(self, cat_id, default_rating):
         try:
             cat = self.cat_collection.find_one({"_id": ObjectId(cat_id)})
@@ -35,6 +58,7 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
                 {"_id": ObjectId(winner_id)},
                 {"$set": {"rating": new_winner_rating}, "$inc": {"wins": 1, "total_votes": 1}}
             )
+            logging.debug(f"Winner cat ID: {winner_id} updated with new rating: {new_winner_rating}")
         except errors.PyMongoError as e:
             logging.error(f"Error updating winner cat ID: {winner_id}: {e}")
 
@@ -44,6 +68,7 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
                 {"_id": ObjectId(loser_id)},
                 {"$set": {"rating": new_loser_rating}, "$inc": {"losses": 1, "total_votes": 1}}
             )
+            logging.debug(f"Loser cat ID: {loser_id} updated with new rating: {new_loser_rating}")
         except errors.PyMongoError as e:
             logging.error(f"Error updating loser cat ID: {loser_id}: {e}")
 
@@ -55,6 +80,7 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
                 "user_id": user_id,
                 "reason": message
             })
+            logging.info(f"Declined photo ID: {image_id} inserted into database.")
             self.user_collection.update_one(
                 {"_id": user_id},
                 {"$push": {"declined_photos": image_id}}
@@ -77,5 +103,6 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
                 {"_id": user_id},
                 {"$push": {"accepted_photos": image_id}}
             )
+            logging.info(f"Accepted photo ID: {image_id} inserted into database.")
         except errors.PyMongoError as e:
             logging.error(f"Error inserting accepted photo ID: {image_id}: {e}")

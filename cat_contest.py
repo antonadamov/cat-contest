@@ -29,8 +29,6 @@ class CatContest:
         new_loser_rating = loser_rating + K * (0 - expected_loser)
         return new_winner_rating, new_loser_rating
 
-
-
     def update_ratings(self, winner_id, loser_id):
         
         winner = self.db.cat_collection.find_one({"_id": ObjectId(winner_id)})
@@ -97,40 +95,27 @@ class CatContest:
     # Define a function to handle the /start command
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.message.from_user
-        user_info = {
-            "_id": user.id,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "username": user.username,
-            "language_code": user.language_code,
-            "photos": []
-        }
+        logging.info(f"New user logged in {user.id}")
 
-        logging.info(f"New user logged in {user_info}")
-        self.db.user_collection.update_one({"_id": user.id}, {"$set": user_info}, upsert=True)
+        self.db.add_user(user)
 
         await update.message.reply_text('Hello! I am your bot.')
         await self.vote(update, context, user.language_code)
 
     async def vote(self, update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: str = "en") -> None:
         cat_pictures = list(self.db.cat_collection.find().sort("total_votes", 1).limit(10))
-        
         if len(cat_pictures) < 2:
             await self.send_not_enough_pictures_message(self, update, lang_code)
             return
-
         selected_cats = random.sample(cat_pictures, 2)
         media_group = [InputMediaPhoto(self.db.fs.get(cat["_id"]).read(), caption=f"Cat {i+1}") for i, cat in enumerate(selected_cats)]
         reply_markup = self.create_keyboard(selected_cats, lang_code)
-
         await self.send_media_and_message(context, update.effective_chat.id, media_group, lang_code, reply_markup)
 
     async def send_not_enough_pictures_message(self, update: Update, lang_code: str) -> None:
         keyboard = [[InlineKeyboardButton(self.get_text(lang_code, "add_photo"), callback_data='add_photo')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(self.get_text(lang_code, "not_enough_pictures"), reply_markup=reply_markup)
-
-
 
     def create_keyboard(self, cats: List[dict], lang_code: str) -> InlineKeyboardMarkup:
         cat1, cat2 = cats
