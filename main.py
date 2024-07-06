@@ -27,6 +27,8 @@ def main():
 
     application.add_handler(CommandHandler("start", cat_contest.start))
     application.add_handler(CommandHandler("vote", cat_contest.vote))
+    application.add_handler(CommandHandler("rank", cat_contest.show_results))
+    application.add_handler(CommandHandler("myrank", cat_contest.show_users_photos_rating))
     application.add_handler(CallbackQueryHandler(cat_contest.button))
     application.add_handler(MessageHandler(filters.PHOTO, cat_contest.photo_handler))
 

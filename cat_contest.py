@@ -1,8 +1,7 @@
 import logging
 import os
-import random
+
 import re
-from bson import ObjectId
 from telegram import InlineKeyboardButton, InputMediaPhoto, Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from PIL import Image
@@ -14,37 +13,12 @@ from db.mongo_database import MongoCatVotingDatabase
 
 class CatContest:
 # Elo rating constants
-    DEFAULT_RATING = 1400
 
     def __init__(self, token, aws_access_key, aws_secret_key, aws_region, db_host, db_port, db_name):
         self.token = token
         self.moderation_service = AmazonRekognitionModerationService(aws_access_key, aws_secret_key, aws_region)
         self.db = MongoCatVotingDatabase(db_host, db_port, db_name)
-
-    def calculate_new_ratings(self, winner_rating, loser_rating):
-        K = 32
-        expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
-        expected_loser = 1 / (1 + 10 ** ((winner_rating - loser_rating) / 400))
-        new_winner_rating = winner_rating + K * (1 - expected_winner)
-        new_loser_rating = loser_rating + K * (0 - expected_loser)
-        return new_winner_rating, new_loser_rating
-
-    def update_ratings(self, winner_id, loser_id):
-        
-        winner = self.db.cat_collection.find_one({"_id": ObjectId(winner_id)})
-        loser = self.db.cat_collection.find_one({"_id": ObjectId(loser_id)})
-
-        if not winner or not loser:
-            logging.error(f"Cannot find cat entries for winner_id: {winner_id} or loser_id: {loser_id}")
-            return
-
-        winner_rating = winner.get("rating", self.DEFAULT_RATING)
-        loser_rating = loser.get("rating", self.DEFAULT_RATING)
-
-        new_winner_rating, new_loser_rating = self.calculate_new_ratings(winner_rating, loser_rating)
-
-        self.db.update_winner(winner_id, new_winner_rating)
-        self.db.update_loser(loser_id, new_loser_rating)
+        self.user_state = {}
         
     def get_text(self, lang_code, key, **kwargs):
         texts = {
@@ -59,7 +33,8 @@ class CatContest:
                 "add_photo": "Add my cat photo",
                 "send_photo_prompt": "Please send me the photo of your cat.",
                 "photo_added": "Your photo has been added to the contest!",
-                "photo_declined": "Your photo cannot be added. Reason: {message}"
+                "photo_declined": "Your photo cannot be added. Reason: {message}",
+                "display_users_photos": "Display my photos"
             },
             "ru": {
                 "vote_cat_1": "Кот слева",
@@ -72,7 +47,8 @@ class CatContest:
                 "add_photo": "Добавить фото моего кота",
                 "send_photo_prompt": "Пожалуйста, пришлите мне фото вашего кота.",
                 "photo_added": "Фото вашего кота добавлено!",
-                "photo_declined": "Ваше фото не может быть добавлено. Причина: {message}"
+                "photo_declined": "Ваше фото не может быть добавлено. Причина: {message}",
+                "display_users_photos": "Показать мои фото"
             }
         }
         text = texts.get(lang_code, texts["en"]).get(key, key)
@@ -103,11 +79,10 @@ class CatContest:
         await self.vote(update, context, user.language_code)
 
     async def vote(self, update: Update, context: ContextTypes.DEFAULT_TYPE, lang_code: str = "en") -> None:
-        cat_pictures = list(self.db.cat_collection.find().sort("total_votes", 1).limit(10))
-        if len(cat_pictures) < 2:
+        selected_cats = self.db.get_cats_for_voting()
+        if len(selected_cats) < 2:
             await self.send_not_enough_pictures_message(self, update, lang_code)
             return
-        selected_cats = random.sample(cat_pictures, 2)
         media_group = [InputMediaPhoto(self.db.fs.get(cat["_id"]).read(), caption=f"Cat {i+1}") for i, cat in enumerate(selected_cats)]
         reply_markup = self.create_keyboard(selected_cats, lang_code)
         await self.send_media_and_message(context, update.effective_chat.id, media_group, lang_code, reply_markup)
@@ -123,6 +98,7 @@ class CatContest:
             [InlineKeyboardButton(self.get_text(lang_code, "vote_cat_1"), callback_data=f'vote_{cat1["_id"]}_{cat2["_id"]}_1'),
             InlineKeyboardButton(self.get_text(lang_code, "vote_cat_2"), callback_data=f'vote_{cat1["_id"]}_{cat2["_id"]}_2')],
             [InlineKeyboardButton(self.get_text(lang_code, "show_results"), callback_data='show_results')],
+            [InlineKeyboardButton(self.get_text(lang_code, "display_users_photos"), callback_data='display_users_photos')],
             [InlineKeyboardButton(self.get_text(lang_code, "add_photo"), callback_data='add_photo')]
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -138,6 +114,8 @@ class CatContest:
         # Process the vote
         data = query.data
         user_lang = query.from_user.language_code
+        user_id = query.from_user.id
+        self.user_state[user_id] = data
         if data == 'show_results':
             await self.show_results(update, context)
             return
@@ -146,6 +124,9 @@ class CatContest:
             return
         elif data == 'add_photo':
             await self.prompt_for_photo(query, user_lang, context)
+            return
+        elif data == 'display_users_photos':
+            await self.show_users_photos_rating(update, context)
             return
 
         await self.process_vote(query, data, user_lang, update, context)
@@ -157,11 +138,11 @@ class CatContest:
     async def process_vote(self, query, data, user_lang, update, context) -> None:
         _, cat1_id, cat2_id, winner_index = data.split('_')
         if winner_index == '1':
-            self.update_ratings(cat1_id, cat2_id)
+            self.db.update_ratings(cat1_id, cat2_id)
             winner = self.get_text(user_lang, "vote_cat_1")
             logging.info(f"User {query.from_user.id} voted for cat {cat1_id}")
         else:
-            self.update_ratings(cat2_id, cat1_id)
+            self.db.update_ratings(cat2_id, cat1_id)
             winner = self.get_text(user_lang, "vote_cat_2")
             logging.info(f"User {query.from_user.id} voted for cat {cat2_id}")
 
@@ -189,11 +170,44 @@ class CatContest:
         user_lang = update.callback_query.from_user.language_code
         await self.send_next_action_prompt(update, context, user_lang)
 
+
+
+
+
+
+
+
+    async def show_users_photos_rating(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = update.callback_query.from_user.id
+
+        user_photos = self.db.get_user_photos_with_votes(user_id)
+        for idx, cat in enumerate(user_photos):  # Unpack the tuple here
+            cat_image_path = self.db.fs.get(cat["photo_id"]).read()
+            wins = cat.get("wins", 0)
+            losses = cat.get("losses", 0)
+            rank = cat.get("rank", 0)
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=cat_image_path,
+                caption=f"Rank: {rank}, Wins: {wins}, Losses: {losses}"
+            )
+        user_lang = update.callback_query.from_user.language_code
+        await self.send_next_action_prompt(update, context, user_lang)
+
+
     async def send_next_action_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_lang) -> None:
+        user_id = update.effective_user.id
+        previous_action = self.user_state[user_id]
         keyboard = [
             [InlineKeyboardButton(self.get_text(user_lang, "continue_voting"), callback_data='continue_voting')],
             [InlineKeyboardButton(self.get_text(user_lang, "add_photo"), callback_data='add_photo')]
         ]
+        if previous_action == "show_results":
+            keyboard+=  [[InlineKeyboardButton(self.get_text(user_lang, "display_users_photos"), callback_data='display_users_photos')]]
+        else:
+            keyboard+= [[InlineKeyboardButton(self.get_text(user_lang, "show_results"), callback_data='show_results')]]
+
+
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=self.get_text(user_lang, "next_action_prompt"), reply_markup=reply_markup)
 
@@ -243,4 +257,4 @@ class CatContest:
     async def insert_accepted_photo_db(self, update, sanitized_filename, processed_image_path):
         with open(processed_image_path, 'rb') as f:
             image_id = self.db.fs.put(f, filename=sanitized_filename, user_id=update.message.from_user.id)
-        self.db.insert_accepted_photo(image_id, sanitized_filename, update.message.from_user.id, self.DEFAULT_RATING)
+        self.db.insert_accepted_photo(image_id, sanitized_filename, update.message.from_user.id)
