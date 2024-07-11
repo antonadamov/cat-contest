@@ -115,5 +115,61 @@ class TestAddCatMethod(unittest.TestCase):
         # Check the result
         self.assertEqual(result, [])
 
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_user_photos')
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_photos_details')
+    def test_get_user_photos_with_votes_success(self, mock_get_photos_details, mock_get_user_photos):
+        # Mock the user photos
+        mock_user_photos = ['photo1', 'photo2']
+        mock_get_user_photos.return_value = mock_user_photos
+
+        # Mock the photos details
+        mock_photos_details = [
+            {'photo_id': 'photo1', 'wins': 3, 'losses': 1, 'rank': 2},
+            {'photo_id': 'photo2', 'wins': 5, 'losses': 2, 'rank': 1},
+        ]
+        mock_get_photos_details.return_value = mock_photos_details
+
+        # Call the method
+        result = self.database.get_user_photos_with_votes('test_user_id')
+
+        # Check that the internal methods were called correctly
+        mock_get_user_photos.assert_called_once_with('test_user_id')
+        mock_get_photos_details.assert_called_once_with(mock_user_photos)
+
+        # Check the result
+        self.assertEqual(result, mock_photos_details)
+
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_user_photos')
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_photos_details', return_value=[])
+    def test_get_user_photos_with_votes_no_photos(self, mock_get_photos_details, mock_get_user_photos):
+        # Mock no user photos
+        mock_get_user_photos.return_value = []
+
+        # Call the method
+        result = self.database.get_user_photos_with_votes('test_user_id')
+
+        # Check that the internal methods were called correctly
+        mock_get_user_photos.assert_called_once_with('test_user_id')
+        mock_get_photos_details.assert_called_once_with([])
+
+        # Check the result
+        self.assertEqual(result, [])
+
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_user_photos')
+    @patch('db.mongo_database.MongoCatVotingDatabase._get_photos_details')
+    @patch('db.mongo_database.logging.error')
+    def test_get_user_photos_with_votes_error(self, mock_logging_error, mock_get_photos_details, mock_get_user_photos):
+        # Simulate an exception being raised when calling _get_user_photos
+        mock_get_user_photos.side_effect = errors.PyMongoError('Error')
+
+        # Call the method
+        result = self.database.get_user_photos_with_votes('test_user_id')
+
+        # Check that the error was logged
+        mock_logging_error.assert_called_once_with(f"Error fetching photos for user ID: test_user_id: Error")
+
+        # Check the result
+        self.assertEqual(result, [])
+
 if __name__ == '__main__':
     unittest.main()
