@@ -42,13 +42,21 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
             logging.error(f"Error adding user {user.id}: {e}")
 
     def get_cats_for_voting(self):
-        cat_pictures = list(self.cat_collection.find().sort("total_votes", 1).limit(10))
-        return random.sample(cat_pictures, 2)
+        try:
+            cat_pictures = list(self.cat_collection.find().sort("total_votes", 1).limit(10))
+            return random.sample(cat_pictures, 2)
+        except errors.PyMongoError as e:
+            logging.error(f"Error fetching cats for voting: {e}")
+            return []
     
     def get_user_photos_with_votes(self, user_id):
-        user_photos = self._get_user_photos(user_id)
-        photos_details = self._get_photos_details(user_photos)
-        return photos_details
+        try:
+            user_photos = self._get_user_photos(user_id)
+            photos_details = self._get_photos_details(user_photos)
+            return photos_details
+        except errors.PyMongoError as e:
+            logging.error(f"Error fetching photos for user ID: {user_id}: {e}")
+            return []
 
     def _get_user_photos(self, user_id):
         try:
@@ -97,20 +105,23 @@ class MongoCatVotingDatabase(CatVotingDatabaseInterface):
             return DEFAULT_RATING
         
     def update_ratings(self, winner_id, loser_id):
-        winner = self.cat_collection.find_one({"_id": ObjectId(winner_id)})
-        loser = self.cat_collection.find_one({"_id": ObjectId(loser_id)})
+        try:
+            winner = self.cat_collection.find_one({"_id": ObjectId(winner_id)})
+            loser = self.cat_collection.find_one({"_id": ObjectId(loser_id)})
 
-        if not winner or not loser:
-            logging.error(f"Cannot find cat entries for winner_id: {winner_id} or loser_id: {loser_id}")
-            return
+            if not winner or not loser:
+                logging.error(f"Cannot find cat entries for winner_id: {winner_id} or loser_id: {loser_id}")
+                return
 
-        winner_rating = winner.get("rating", DEFAULT_RATING)
-        loser_rating = loser.get("rating", DEFAULT_RATING)
+            winner_rating = winner.get("rating", DEFAULT_RATING)
+            loser_rating = loser.get("rating", DEFAULT_RATING)
 
-        new_winner_rating, new_loser_rating = calculate_new_ratings(winner_rating, loser_rating)
+            new_winner_rating, new_loser_rating = calculate_new_ratings(winner_rating, loser_rating)
 
-        self.update_winner(winner_id, new_winner_rating)
-        self.update_loser(loser_id, new_loser_rating)
+            self.update_winner(winner_id, new_winner_rating)
+            self.update_loser(loser_id, new_loser_rating)
+        except errors.PyMongoError as e:
+            logging.error(f"Error updating ratings for winner ID: {winner_id} and loser ID: {loser_id}: {e}")
 
     def update_winner(self, winner_id, new_winner_rating):
         try:
