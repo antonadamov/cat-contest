@@ -5,12 +5,16 @@ from moderation.moderation_interface import ImageModerationService
 
 class AmazonRekognitionModerationService(ImageModerationService):
     def __init__(self, aws_access_key, aws_secret_key, region_name):
-        self.client = boto3.client(
-            'rekognition',
-            aws_access_key_id=aws_access_key,
-            aws_secret_access_key=aws_secret_key,
-            region_name=region_name
-        )
+        try:
+            self.client = boto3.client(
+                'rekognition',
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key,
+                region_name=region_name
+            )
+        except (BotoCoreError, ClientError) as e:
+            logging.error(f"Failed to create Amazon Rekognition client: {e}")
+            raise
 
     def moderate_image(self, image_path):
         try:
