@@ -1,4 +1,5 @@
 import boto3
+import logging
 from botocore.exceptions import BotoCoreError, ClientError
 from moderation.moderation_interface import ImageModerationService
 
@@ -22,26 +23,36 @@ class AmazonRekognitionModerationService(ImageModerationService):
                 return True, "Cat found, image is appropriate"
             return False, "No cat found"
         except IOError as e:
+            logging.error(f"Failed to read image: {e}")
             return False, f"Failed to read image: {e}"
         except (BotoCoreError, ClientError) as e:
+            logging.error(f"Failed to moderate image: {e}")
             return False, f"Failed to moderate image: {e}"
     
     def _contains_inappropriate_content(self, image_bytes):
-        response = self.client.detect_moderation_labels(
-            Image={'Bytes': image_bytes}
-        )
-        for label in response['ModerationLabels']:
-            if label['Confidence'] > 90: 
-                return True
-        return False
+        try:
+            response = self.client.detect_moderation_labels(
+                Image={'Bytes': image_bytes}
+            )
+            for label in response['ModerationLabels']:
+                if label['Confidence'] > 90: 
+                    return True
+            return False
+        except (BotoCoreError, ClientError) as e:
+            logging.error(f"Failed to detect moderation labels: {e}")
+            return False
 
     def _contains_cat(self, image_bytes):
-        response = self.client.detect_labels(
-            Image={'Bytes': image_bytes},
-            MaxLabels=10,
-            MinConfidence=75
-        )
-        for label in response['Labels']:
-            if label['Name'].lower() == 'cat' and label['Confidence'] > 75:
-                return True
-        return False
+        try:
+            response = self.client.detect_labels(
+                Image={'Bytes': image_bytes},
+                MaxLabels=10,
+                MinConfidence=75
+            )
+            for label in response['Labels']:
+                if label['Name'].lower() == 'cat' and label['Confidence'] > 75:
+                    return True
+            return False
+        except (BotoCoreError, ClientError) as e:
+            logging.error(f"Failed to detect labels: {e}")
+            return False
