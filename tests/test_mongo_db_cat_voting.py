@@ -1,12 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pymongo import errors
-import gridfs
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-
-from db.mongo_database import MongoCatVotingDatabase
+from db import MongoCatVotingDatabase
 
 class TestAddCatMethod(unittest.TestCase):
     @patch('db.mongo_database.MongoClient')

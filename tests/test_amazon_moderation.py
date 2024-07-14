@@ -1,10 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-import sys
-import os
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-from moderation.amazon_moderation import AmazonRekognitionModerationService
+from moderation import AmazonRekognitionModerationService
 
 class TestAmazonRekognitionModerationService(unittest.TestCase):
     @patch('moderation.amazon_moderation.boto3.client')
