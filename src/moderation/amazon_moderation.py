@@ -1,7 +1,7 @@
 import boto3
 import logging
 from botocore.exceptions import BotoCoreError, ClientError
-from moderation.moderation_interface import ImageModerationService
+from .moderation_interface import ImageModerationService
 
 class AmazonRekognitionModerationService(ImageModerationService):
     def __init__(self, aws_access_key, aws_secret_key, region_name):

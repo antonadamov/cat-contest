@@ -3,8 +3,8 @@ from pymongo import MongoClient, errors
 from bson import ObjectId
 import random
 import logging
-from db.database_interface import CatVotingDatabaseInterface
-from utils.rating_calculation import calculate_new_ratings, DEFAULT_RATING
+from db import CatVotingDatabaseInterface
+from utils import calculate_new_ratings, DEFAULT_RATING
 
 class MongoCatVotingDatabase(CatVotingDatabaseInterface):
     def __init__(self, host, port, db_name):

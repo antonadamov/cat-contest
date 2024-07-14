@@ -6,8 +6,8 @@ from telegram import InlineKeyboardButton, InputMediaPhoto, Update, InlineKeyboa
 from telegram.ext import ContextTypes
 from PIL import Image
 from typing import List
-from moderation.amazon_moderation import AmazonRekognitionModerationService
-from db.mongo_database import MongoCatVotingDatabase
+from moderation import AmazonRekognitionModerationService
+from db import MongoCatVotingDatabase
 
 
 
